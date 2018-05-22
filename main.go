@@ -89,7 +89,8 @@ func strike(u string) {
 	atomic.AddInt32(&pending, 1)
 	defer atomic.AddInt32(&pending, -1)
 	t0 := time.Now()
-	resp, err := http.Get(u)
+	client := http.Client{Timeout: time.Duration(time.Second)}
+	resp, err := client.Get(u)
 	eventChan <- event{t0, time.Now(), err, resp}
 	if resp != nil {
 		if err := resp.Body.Close(); err != nil {
