@@ -18,6 +18,20 @@ import (
 var numWorkers = flag.Int("w", 100, "number of concurrent workers")
 var fetcher = flag.String("fetcher", "go", "type of fetcher to use: go|noop|curl")
 
+var interval = time.Second
+
+var reqQPS int32 = 1
+
+// An event
+type event struct {
+	t0         time.Time
+	t1         time.Time
+	statusText string
+}
+
+// This chan is meant to have enough capacity for what can happen in a second.
+var eventChan = make(chan event, 100000)
+
 func main() {
 	flag.Parse()
 
@@ -59,18 +73,6 @@ func main() {
 		}
 	}
 }
-
-var reqQPS int32 = 1
-
-// An event
-type event struct {
-	t0         time.Time
-	t1         time.Time
-	statusText string
-}
-
-// This chan is meant to have enough capacity for what can happen in a second.
-var eventChan = make(chan event, 100000)
 
 func hammer(url string) {
 	ch := make(chan string)
@@ -135,8 +137,6 @@ func ticktock() chan struct{} {
 	return c
 }
 
-var interval = time.Second
-
 func sendTermboxInterrupts() {
 	for _ = range time.Tick(interval) {
 		termbox.Interrupt()
@@ -147,10 +147,16 @@ func sendTermboxInterrupts() {
 func draw() {
 	m := make(map[string]int)
 loop:
-	// Grab the latest events from the buffered event chan
+	// Grab the latest events from the buffered event chan and make a
+	// histogram of them.
+	now := time.Now()
 	for {
 		select {
 		case e := <-eventChan:
+			// Drop anything that happened too long ago
+			if now.Sub(e.t0) > interval {
+				break loop
+			}
 			m[e.statusText]++
 		default:
 			break loop
@@ -162,6 +168,7 @@ loop:
 	}
 	sort.Strings(keys)
 
+	// Do the actual drawing.
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 	y := 0
 	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("Target QPS: %d", atomic.LoadInt32(&reqQPS)))
