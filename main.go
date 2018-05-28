@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 )
 
 func main() {
+	usingCurl := flag.Bool("curl", false, "whether to use curl")
 	numWorkers := flag.Int("w", 100, "number of concurrent workers")
 	flag.Parse()
 
@@ -32,7 +34,7 @@ func main() {
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 	draw()
 
-	go hammer(*numWorkers, u)
+	go hammer(*numWorkers, u, *usingCurl)
 	go sendTermboxInterrupts()
 
 	for {
@@ -61,21 +63,20 @@ var reqQPS int32 = 1
 
 // An event
 type event struct {
-	t0   time.Time
-	t1   time.Time
-	err  error
-	resp *http.Response
+	t0         time.Time
+	t1         time.Time
+	statusText string
 }
 
 // This chan is meant to have enough capacity for what can happen in a second.
 var eventChan = make(chan event, 100000)
 
-func hammer(numWorkers int, url string) {
+func hammer(numWorkers int, url string, usingCurl bool) {
 	ch := make(chan string)
 
 	// Spin up workers.
 	for i := 0; i < numWorkers; i++ {
-		go worker(ch)
+		go worker(ch, usingCurl)
 	}
 
 	// Orchestrate the work.
@@ -84,16 +85,29 @@ func hammer(numWorkers int, url string) {
 	}
 }
 
-func worker(ch chan string) {
+func worker(ch chan string, usingCurl bool) {
 	for u := range ch {
 		t0 := time.Now()
-		client := http.Client{Timeout: time.Duration(time.Second)}
-		resp, err := client.Get(u)
-		eventChan <- event{t0, time.Now(), err, resp}
-		if resp != nil {
-			if err := resp.Body.Close(); err != nil {
-				log.Printf("Failed to close response body: %v", err)
+		if usingCurl {
+			cmd := exec.Command("curl", "-s", "-S", u)
+			out, _ := cmd.CombinedOutput()
+			eventChan <- event{t0, time.Now(), string(out)}
+		} else {
+			client := http.Client{Timeout: time.Duration(time.Second)}
+			resp, err := client.Get(u)
+			if resp != nil {
+				if err := resp.Body.Close(); err != nil {
+					log.Printf("Failed to close response body: %v", err)
+				}
 			}
+			var st string
+			if err != nil {
+				parts := strings.Split(err.Error(), ": ")
+				st = parts[len(parts)-1]
+			} else {
+				st = http.StatusText(resp.StatusCode)
+			}
+			eventChan <- event{t0, time.Now(), st}
 		}
 	}
 }
@@ -125,16 +139,7 @@ loop:
 	for {
 		select {
 		case e := <-eventChan:
-			s := ""
-			switch {
-			case e.err != nil:
-				s = e.err.Error()
-				parts := strings.Split(s, ": ")
-				s = parts[len(parts)-1]
-			default:
-				s = http.StatusText(e.resp.StatusCode)
-			}
-			m[s]++
+			m[e.statusText]++
 		default:
 			break loop
 		}
