@@ -146,18 +146,16 @@ func sendTermboxInterrupts() {
 // draw repaints the termbox UI, showing stats.
 func draw() {
 	m := make(map[string]int)
-loop:
+	now := time.Now()
 	// Grab the latest events from the buffered event chan and make a
 	// histogram of them.
-	now := time.Now()
+loop:
 	for {
 		select {
 		case e := <-eventChan:
-			// Drop anything that happened too long ago
-			if now.Sub(e.t0) > interval {
-				break loop
+			if now.Sub(e.t0) < interval {
+				m[e.statusText]++
 			}
-			m[e.statusText]++
 		default:
 			break loop
 		}
