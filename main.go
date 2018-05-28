@@ -109,12 +109,15 @@ func ticktock() chan struct{} {
 	return c
 }
 
+var interval = time.Second
+
 func sendTermboxInterrupts() {
-	for _ = range time.Tick(time.Second) {
+	for _ = range time.Tick(interval) {
 		termbox.Interrupt()
 	}
 }
 
+// draw repaints the termbox UI, showing stats.
 func draw() {
 	m := make(map[string]int)
 loop:
@@ -144,12 +147,18 @@ loop:
 
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 	y := 0
-	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("QPS: %d", atomic.LoadInt32(&reqQPS)))
-	y++
-	for _, k := range keys {
-		msg := fmt.Sprintf("%s: %d", k, m[k])
-		tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, msg)
+	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("Target QPS: %d", atomic.LoadInt32(&reqQPS)))
+	y += 2
+	if len(m) == 0 {
+		tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("No responses in past %v", interval))
+	} else {
+		tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("Responses in past %v:", interval))
 		y++
+		for _, k := range keys {
+			msg := fmt.Sprintf("  %s: %d", k, m[k])
+			tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, msg)
+			y++
+		}
 	}
 	termbox.Flush()
 }
