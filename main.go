@@ -104,7 +104,8 @@ func worker(ch chan string) {
 					continue
 				}
 				if err := resp.Body.Close(); err != nil {
-					log.Printf("Failed to close response body: %v", err)
+					eventChan <- event{t0, time.Now(), fmt.Sprintf("Failed to close response body: %v", err)}
+					continue
 				}
 			}
 			var st string
