@@ -148,7 +148,7 @@ func sendTermboxInterrupts() {
 
 // draw repaints the termbox UI, showing stats.
 func draw() {
-	keys, m := makeReport()
+	keys, m, maxLatency := makeReport()
 
 	// Do the actual drawing.
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
@@ -157,6 +157,8 @@ func draw() {
 	y++
 	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("%d workers", *numWorkers))
 	y++
+	y++
+	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("Max latency: %v", maxLatency))
 	y++
 	if len(m) == 0 {
 		tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("No responses in past %v", interval))
@@ -205,23 +207,26 @@ func removeOldEvents() {
 	}
 }
 
-func makeReport() ([]string, map[string]int) {
-	m := make(map[string]int)
+func makeReport() (keys []string, m map[string]int, maxLatency time.Duration) {
+	m = make(map[string]int)
 	now := time.Now()
 	emu.Lock()
 	for _, e := range events {
 		if now.Sub(e.t0) < interval {
 			m[e.statusText]++
+			dt := e.t1.Sub(e.t0)
+			if dt > maxLatency {
+				maxLatency = dt
+			}
 		}
 	}
 	emu.Unlock()
 
 	// Get the map keys and sort them
-	var keys []string
 	for k := range m {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
-	return keys, m
+	return keys, m, maxLatency
 }
