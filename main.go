@@ -15,11 +15,6 @@ import (
 )
 
 func main() {
-	err := termbox.Init()
-	if err != nil {
-		panic(err)
-	}
-
 	numWorkers := flag.Int("w", 100, "number of concurrent workers")
 	flag.Parse()
 
@@ -29,6 +24,10 @@ func main() {
 	}
 	u := flag.Arg(0)
 
+	err := termbox.Init()
+	if err != nil {
+		panic(err)
+	}
 	termbox.SetInputMode(termbox.InputEsc | termbox.InputMouse)
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 	draw()
