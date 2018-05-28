@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,7 +31,7 @@ type event struct {
 }
 
 // This chan is meant to have enough capacity for what can happen in a second.
-var eventChan = make(chan event, 100000)
+var eventChan = make(chan event)
 
 func main() {
 	flag.Parse()
@@ -51,6 +52,8 @@ func main() {
 
 	go hammer(u)
 	go sendTermboxInterrupts()
+	go addToEventSlice()
+	go removeOldEvents()
 
 	for {
 		switch ev := termbox.PollEvent(); ev.Type {
@@ -138,33 +141,14 @@ func ticktock() chan struct{} {
 }
 
 func sendTermboxInterrupts() {
-	for _ = range time.Tick(interval) {
+	for _ = range time.Tick(100 * time.Millisecond) {
 		termbox.Interrupt()
 	}
 }
 
 // draw repaints the termbox UI, showing stats.
 func draw() {
-	m := make(map[string]int)
-	now := time.Now()
-	// Grab the latest events from the buffered event chan and make a
-	// histogram of them.
-loop:
-	for {
-		select {
-		case e := <-eventChan:
-			if now.Sub(e.t0) < interval {
-				m[e.statusText]++
-			}
-		default:
-			break loop
-		}
-	}
-	var keys []string
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys, m := makeReport()
 
 	// Do the actual drawing.
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
@@ -193,4 +177,51 @@ func tbprint(x, y int, fg, bg termbox.Attribute, msg string) {
 		termbox.SetCell(x, y, c, fg, bg)
 		x++
 	}
+}
+
+var emu sync.Mutex
+var events []event
+
+func addToEventSlice() {
+	for e := range eventChan {
+		emu.Lock()
+		events = append(events, e)
+		emu.Unlock()
+	}
+}
+
+func removeOldEvents() {
+	for _ = range time.Tick(10 * time.Millisecond) {
+		now := time.Now()
+		emu.Lock()
+		events2 := make([]event, 0, len(events))
+		for _, e := range events {
+			if now.Sub(e.t0) < interval {
+				events2 = append(events2, e)
+			}
+		}
+		events = events2
+		emu.Unlock()
+	}
+}
+
+func makeReport() ([]string, map[string]int) {
+	m := make(map[string]int)
+	now := time.Now()
+	emu.Lock()
+	for _, e := range events {
+		if now.Sub(e.t0) < interval {
+			m[e.statusText]++
+		}
+	}
+	emu.Unlock()
+
+	// Get the map keys and sort them
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	return keys, m
 }
