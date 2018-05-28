@@ -21,6 +21,7 @@ func main() {
 	}
 	defer termbox.Close()
 
+	numWorkers := flag.Int("w", 100, "number of concurrent workers")
 	flag.Parse()
 
 	if flag.NArg() != 1 {
@@ -29,7 +30,7 @@ func main() {
 	}
 	u := flag.Arg(0)
 
-	go hammer(u)
+	go hammer(*numWorkers, u)
 	go report()
 
 	termbox.SetInputMode(termbox.InputEsc | termbox.InputMouse)
@@ -54,9 +55,6 @@ loop:
 
 var reqQPS int32 = 1
 
-// Number of pending requests
-var pending int32 = 0
-
 // An event
 type event struct {
 	t0   time.Time
@@ -68,9 +66,31 @@ type event struct {
 // This chan is meant to have enough capacity for what can happen in a second.
 var eventChan = make(chan event, 100000)
 
-func hammer(u string) {
+func hammer(numWorkers int, url string) {
+	ch := make(chan string)
+
+	// Spin up workers.
+	for i := 0; i < numWorkers; i++ {
+		go worker(ch)
+	}
+
+	// Orchestrate the work.
 	for _ = range ticktock() {
-		go strike(u)
+		ch <- url
+	}
+}
+
+func worker(ch chan string) {
+	for u := range ch {
+		t0 := time.Now()
+		client := http.Client{Timeout: time.Duration(time.Second)}
+		resp, err := client.Get(u)
+		eventChan <- event{t0, time.Now(), err, resp}
+		if resp != nil {
+			if err := resp.Body.Close(); err != nil {
+				log.Printf("Failed to close response body: %v", err)
+			}
+		}
 	}
 }
 
@@ -83,20 +103,6 @@ func ticktock() chan struct{} {
 		}
 	}()
 	return c
-}
-
-func strike(u string) {
-	atomic.AddInt32(&pending, 1)
-	defer atomic.AddInt32(&pending, -1)
-	t0 := time.Now()
-	client := http.Client{Timeout: time.Duration(time.Second)}
-	resp, err := client.Get(u)
-	eventChan <- event{t0, time.Now(), err, resp}
-	if resp != nil {
-		if err := resp.Body.Close(); err != nil {
-			log.Printf("Failed to close response body: %v", err)
-		}
-	}
 }
 
 func report() {
@@ -130,8 +136,6 @@ func report() {
 		termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 		y := 0
 		tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("QPS: %d", atomic.LoadInt32(&reqQPS)))
-		y++
-		tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("pending: %d", atomic.LoadInt32(&pending)))
 		y++
 		for _, k := range keys {
 			msg := fmt.Sprintf("%s: %d", k, m[k])
