@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
@@ -98,6 +98,11 @@ func worker(ch chan string) {
 			client := http.Client{Timeout: time.Duration(time.Second)}
 			resp, err := client.Get(u)
 			if resp != nil {
+				// Read it, just in case that matters somehow.
+				if _, err := ioutil.ReadAll(resp.Body); err != nil {
+					eventChan <- event{t0, time.Now(), fmt.Sprintf("Failed to read response body: %v", err)}
+					continue
+				}
 				if err := resp.Body.Close(); err != nil {
 					log.Printf("Failed to close response body: %v", err)
 				}
