@@ -19,7 +19,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer termbox.Close()
 
 	numWorkers := flag.Int("w", 100, "number of concurrent workers")
 	flag.Parse()
@@ -30,12 +29,13 @@ func main() {
 	}
 	u := flag.Arg(0)
 
-	go hammer(*numWorkers, u)
-	go report()
-
 	termbox.SetInputMode(termbox.InputEsc | termbox.InputMouse)
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
-loop:
+	draw()
+
+	go hammer(*numWorkers, u)
+	go sendTermboxInterrupts()
+
 	for {
 		switch ev := termbox.PollEvent(); ev.Type {
 		case termbox.EventKey:
@@ -43,12 +43,17 @@ loop:
 			case termbox.KeyArrowUp:
 				q := atomic.LoadInt32(&reqQPS)
 				atomic.StoreInt32(&reqQPS, 2*q)
+				draw()
 			case termbox.KeyArrowDown:
 				q := atomic.LoadInt32(&reqQPS)
 				atomic.StoreInt32(&reqQPS, q/2)
+				draw()
 			case termbox.KeyCtrlC:
-				break loop
+				termbox.Close()
+				os.Exit(0)
 			}
+		case termbox.EventInterrupt:
+			draw()
 		}
 	}
 }
@@ -105,45 +110,49 @@ func ticktock() chan struct{} {
 	return c
 }
 
-func report() {
+func sendTermboxInterrupts() {
 	for _ = range time.Tick(time.Second) {
-		m := make(map[string]int)
-	loop:
-		// Grab the latest events from the buffered event chan
-		for {
-			select {
-			case e := <-eventChan:
-				s := ""
-				switch {
-				case e.err != nil:
-					s = e.err.Error()
-					parts := strings.Split(s, ": ")
-					s = parts[len(parts)-1]
-				default:
-					s = http.StatusText(e.resp.StatusCode)
-				}
-				m[s]++
-			default:
-				break loop
-			}
-		}
-		var keys []string
-		for k := range m {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
-		y := 0
-		tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("QPS: %d", atomic.LoadInt32(&reqQPS)))
-		y++
-		for _, k := range keys {
-			msg := fmt.Sprintf("%s: %d", k, m[k])
-			tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, msg)
-			y++
-		}
-		termbox.Flush()
+		termbox.Interrupt()
 	}
+}
+
+func draw() {
+	m := make(map[string]int)
+loop:
+	// Grab the latest events from the buffered event chan
+	for {
+		select {
+		case e := <-eventChan:
+			s := ""
+			switch {
+			case e.err != nil:
+				s = e.err.Error()
+				parts := strings.Split(s, ": ")
+				s = parts[len(parts)-1]
+			default:
+				s = http.StatusText(e.resp.StatusCode)
+			}
+			m[s]++
+		default:
+			break loop
+		}
+	}
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
+	y := 0
+	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("QPS: %d", atomic.LoadInt32(&reqQPS)))
+	y++
+	for _, k := range keys {
+		msg := fmt.Sprintf("%s: %d", k, m[k])
+		tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, msg)
+		y++
+	}
+	termbox.Flush()
 }
 
 func tbprint(x, y int, fg, bg termbox.Attribute, msg string) {
