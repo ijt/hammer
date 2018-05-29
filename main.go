@@ -29,6 +29,14 @@ var histogram = make(map[string]int)
 
 func main() {
 	flag.Parse()
+	switch *fetcher {
+	case "go":
+	case "noop":
+	case "curl":
+	default:
+		fmt.Printf("--fetcher set to %q, want one of \"go\", \"noop\", or \"curl\"\n", *fetcher)
+		os.Exit(1)
+	}
 
 	if flag.NArg() != 1 {
 		fmt.Printf("Usage: hammer [flags] url\n")
@@ -116,7 +124,7 @@ func worker(ch chan string) {
 		case "noop":
 			addToHistogram("Did nothing")
 		default:
-			dief(fmt.Sprintf("Unrecognized value for --fetcher: %q\n", *fetcher))
+			addToHistogram(fmt.Sprintf("Unrecognized value for --fetcher: %q\n", *fetcher))
 		}
 	}
 }
