@@ -96,7 +96,7 @@ func main() {
 
 func hammer(url string, workChan, doneChan chan struct{}) {
 	// Spin up workers.
-	for i := int64(0); i < *numWorkers; i++ {
+	for i := int64(0); i < atomic.LoadInt64(numWorkers); i++ {
 		go worker(url, workChan, doneChan)
 	}
 
@@ -208,7 +208,7 @@ func draw() {
 	y := 0
 	tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("Target QPS: %d", atomic.LoadInt32(&reqQPS)))
 	y++
-	tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("%d workers", *numWorkers))
+	tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("%d workers", atomic.LoadInt64(numWorkers)))
 	y++
 	tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("Request timeout: %v", requestTimeout()))
 	y++
