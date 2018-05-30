@@ -65,14 +65,19 @@ func main() {
 		case termbox.EventKey:
 			switch ev.Key {
 			case termbox.KeyArrowUp:
-				// Add some workers.
-				for i := 0; i < 10; i++ {
+				// Start some more workers.
+				nw2 := 2 * atomic.LoadInt64(numWorkers)
+				for atomic.LoadInt64(numWorkers) < nw2 {
 					go worker(u, doneChan)
 					atomic.StoreInt64(numWorkers, atomic.LoadInt64(numWorkers)+1)
 				}
 			case termbox.KeyArrowDown:
 				// Stop some existing workers.
-				for i := 0; i < 10 && atomic.LoadInt64(numWorkers) > 1; i++ {
+				nw2 := atomic.LoadInt64(numWorkers) / 2
+				if nw2 == 0 {
+					nw2 = 1
+				}
+				for atomic.LoadInt64(numWorkers) > nw2 {
 					doneChan <- struct{}{}
 					atomic.StoreInt64(numWorkers, atomic.LoadInt64(numWorkers)-1)
 				}
