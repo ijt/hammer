@@ -157,6 +157,9 @@ func addToHistogram(s string) {
 		hmu.Lock()
 		defer hmu.Unlock()
 		histogram[s]--
+		if histogram[s] == 0 {
+			delete(histogram, s)
+		}
 	}()
 }
 
