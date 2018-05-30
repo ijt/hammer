@@ -12,5 +12,7 @@ QPS.
 
 Keybindings:
 
-	- Up   arrow: double the target QPS
-	- Down arrow: halve the target QPS
+	- Up    arrow: double the target QPS
+	- Down  arrow: halve the target QPS
+	- Right arrow: add a worker
+	- Left  arrow: remove a worker

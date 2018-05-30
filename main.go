@@ -16,7 +16,7 @@ import (
 	termbox "github.com/nsf/termbox-go"
 )
 
-var numWorkers = flag.Int("w", 100, "number of concurrent workers")
+var numWorkers = flag.Int64("w", 100, "number of concurrent workers")
 var fetcher = flag.String("fetcher", "go", "type of fetcher to use: go|noop|curl")
 
 var interval = time.Second
@@ -52,7 +52,9 @@ func main() {
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 	draw()
 
-	go hammer(u)
+	doneChan := make(chan struct{})
+	workChan := make(chan struct{}, 1000000)
+	go hammer(u, workChan, doneChan)
 	go sendTermboxInterrupts()
 
 	for {
@@ -60,14 +62,29 @@ func main() {
 		case termbox.EventKey:
 			switch ev.Key {
 			case termbox.KeyArrowUp:
+				// Increase the target QPS.
 				q := atomic.LoadInt32(&reqQPS)
 				atomic.StoreInt32(&reqQPS, 2*q)
 				draw()
 			case termbox.KeyArrowDown:
+				// Decrease the target QPS.
 				q := atomic.LoadInt32(&reqQPS)
 				atomic.StoreInt32(&reqQPS, q/2)
 				draw()
+			case termbox.KeyArrowRight:
+				// Add some workers.
+				for i := 0; i < 10; i++ {
+					go worker(u, workChan, doneChan)
+					atomic.StoreInt64(numWorkers, atomic.LoadInt64(numWorkers)+1)
+				}
+			case termbox.KeyArrowLeft:
+				// Stop some existing workers.
+				for i := 0; i < 10 && atomic.LoadInt64(numWorkers) > 0; i++ {
+					doneChan <- struct{}{}
+					atomic.StoreInt64(numWorkers, atomic.LoadInt64(numWorkers)-1)
+				}
 			case termbox.KeyCtrlC:
+				// Quit
 				termbox.Close()
 				os.Exit(0)
 			}
@@ -77,12 +94,10 @@ func main() {
 	}
 }
 
-func hammer(url string) {
-	workChan := make(chan struct{}, 1000000)
-
+func hammer(url string, workChan, doneChan chan struct{}) {
 	// Spin up workers.
-	for i := 0; i < *numWorkers; i++ {
-		go worker(url, workChan)
+	for i := int64(0); i < *numWorkers; i++ {
+		go worker(url, workChan, doneChan)
 	}
 
 	// Feed the work channel reqQPS tickets per second.
@@ -104,8 +119,15 @@ func hammer(url string) {
 	}
 }
 
-func worker(url string, workChan chan struct{}) {
+func worker(url string, workChan chan struct{}, doneChan chan struct{}) {
 	for {
+		// Quit if the done chan says so.
+		select {
+		case <-doneChan:
+			return
+		default:
+		}
+
 		// Wait until there's work to do.
 		<-workChan
 
@@ -165,7 +187,7 @@ func addToHistogram(s string) {
 
 // requestTimeout calculates how long workers should spend on each request.
 func requestTimeout() time.Duration {
-	d := time.Duration(float64(time.Second) * (float64(*numWorkers) / float64(atomic.LoadInt32(&reqQPS))))
+	d := time.Duration(float64(time.Second) * (float64(atomic.LoadInt64(numWorkers)) / float64(atomic.LoadInt32(&reqQPS))))
 	if d > time.Second {
 		d = time.Second
 	}
