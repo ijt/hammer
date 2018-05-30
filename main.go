@@ -16,16 +16,20 @@ import (
 	termbox "github.com/nsf/termbox-go"
 )
 
-var numWorkers = flag.Int64("w", 100, "number of concurrent workers")
+var numWorkers = flag.Int64("w", 1, "number of concurrent workers")
 var fetcher = flag.String("fetcher", "go", "type of fetcher to use: go|noop|curl")
+var timeout = flag.Duration("timeout", time.Minute, "timeout for requests")
 
-var interval = time.Second
-
-var reqQPS int32 = 1
+const interval = time.Second
 
 // This is a histogram of events over the past second.
 var hmu sync.Mutex
 var histogram = make(map[string]int)
+
+// This is a histogram of latencies in the past second.
+// Usually they won't overlap, but that's fine.
+var lmu sync.Mutex
+var latencies = make(map[time.Duration]int)
 
 func main() {
 	flag.Parse()
@@ -53,8 +57,7 @@ func main() {
 	draw()
 
 	doneChan := make(chan struct{})
-	workChan := make(chan struct{}, 1000000)
-	go hammer(u, workChan, doneChan)
+	go hammer(u, doneChan)
 	go sendTermboxInterrupts()
 
 	for {
@@ -62,24 +65,14 @@ func main() {
 		case termbox.EventKey:
 			switch ev.Key {
 			case termbox.KeyArrowUp:
-				// Increase the target QPS.
-				q := atomic.LoadInt32(&reqQPS)
-				atomic.StoreInt32(&reqQPS, 2*q)
-				draw()
-			case termbox.KeyArrowDown:
-				// Decrease the target QPS.
-				q := atomic.LoadInt32(&reqQPS)
-				atomic.StoreInt32(&reqQPS, q/2)
-				draw()
-			case termbox.KeyArrowRight:
 				// Add some workers.
 				for i := 0; i < 10; i++ {
-					go worker(u, workChan, doneChan)
+					go worker(u, doneChan)
 					atomic.StoreInt64(numWorkers, atomic.LoadInt64(numWorkers)+1)
 				}
-			case termbox.KeyArrowLeft:
+			case termbox.KeyArrowDown:
 				// Stop some existing workers.
-				for i := 0; i < 10 && atomic.LoadInt64(numWorkers) > 0; i++ {
+				for i := 0; i < 10 && atomic.LoadInt64(numWorkers) > 1; i++ {
 					doneChan <- struct{}{}
 					atomic.StoreInt64(numWorkers, atomic.LoadInt64(numWorkers)-1)
 				}
@@ -94,32 +87,14 @@ func main() {
 	}
 }
 
-func hammer(url string, workChan, doneChan chan struct{}) {
+func hammer(url string, doneChan chan struct{}) {
 	// Spin up workers.
 	for i := int64(0); i < atomic.LoadInt64(numWorkers); i++ {
-		go worker(url, workChan, doneChan)
-	}
-
-	// Feed the work channel reqQPS tickets per second.
-	for _ = range time.Tick(time.Second) {
-		// Drain workChan so we know it's starting from 0.
-	loop:
-		for {
-			select {
-			case <-workChan:
-			default:
-				break loop
-			}
-		}
-
-		// Put QPS work tickets into workChan.
-		for i := int32(0); i < atomic.LoadInt32(&reqQPS); i++ {
-			workChan <- struct{}{}
-		}
+		go worker(url, doneChan)
 	}
 }
 
-func worker(url string, workChan chan struct{}, doneChan chan struct{}) {
+func worker(url string, doneChan chan struct{}) {
 	for {
 		// Quit if the done chan says so.
 		select {
@@ -128,26 +103,25 @@ func worker(url string, workChan chan struct{}, doneChan chan struct{}) {
 		default:
 		}
 
-		// Wait until there's work to do.
-		<-workChan
-
 		// Do some work.
+		t0 := time.Now()
+		dt := func() time.Duration { return time.Now().Sub(t0) }
 		switch *fetcher {
 		case "curl":
 			cmd := exec.Command("curl", "-s", "-S", url)
 			out, _ := cmd.CombinedOutput()
-			addToHistogram(string(out))
+			addToHistograms(string(out), dt())
 		case "go":
-			client := http.Client{Timeout: time.Duration(requestTimeout())}
+			client := http.Client{Timeout: *timeout}
 			resp, err := client.Get(url)
 			if resp != nil {
 				// Read it, just in case that matters somehow.
 				if _, err := ioutil.ReadAll(resp.Body); err != nil {
-					addToHistogram(fmt.Sprintf("Failed to read response body: %v", err))
+					addToHistograms(fmt.Sprintf("Failed to read response body: %v", err), dt())
 					continue
 				}
 				if err := resp.Body.Close(); err != nil {
-					addToHistogram(fmt.Sprintf("Failed to close response body: %v", err))
+					addToHistograms(fmt.Sprintf("Failed to close response body: %v", err), dt())
 					continue
 				}
 			}
@@ -159,23 +133,28 @@ func worker(url string, workChan chan struct{}, doneChan chan struct{}) {
 			} else {
 				st = http.StatusText(resp.StatusCode)
 			}
-			addToHistogram(st)
+			addToHistograms(st, dt())
 		case "noop":
-			addToHistogram("Did nothing")
+			addToHistograms("Did nothing", dt())
 		default:
-			addToHistogram(fmt.Sprintf("Unrecognized value for --fetcher: %q\n", *fetcher))
+			addToHistograms(fmt.Sprintf("Unrecognized value for --fetcher: %q\n", *fetcher), dt())
 		}
 	}
 }
 
-// addToHistogram increments the given string in the histogram and then
-// decrements it again after a second.
-func addToHistogram(s string) {
+func addToHistograms(s string, dt time.Duration) {
+	addToStatusCodeHistogram(s)
+	addToLatencyHistogram(dt)
+}
+
+// addToStatusCodeHistogram increments the given string in the histogram and
+// then decrements it again after a second.
+func addToStatusCodeHistogram(s string) {
 	hmu.Lock()
 	defer hmu.Unlock()
 	histogram[s]++
 	go func() {
-		<-time.After(time.Second)
+		<-time.After(interval)
 		hmu.Lock()
 		defer hmu.Unlock()
 		histogram[s]--
@@ -185,13 +164,20 @@ func addToHistogram(s string) {
 	}()
 }
 
-// requestTimeout calculates how long workers should spend on each request.
-func requestTimeout() time.Duration {
-	d := time.Duration(float64(time.Second) * (float64(atomic.LoadInt64(numWorkers)) / float64(atomic.LoadInt32(&reqQPS))))
-	if d > time.Second {
-		d = time.Second
-	}
-	return d
+// addToLatencyHistogram works just like addToStatusCodeHistogram but for latencies.
+func addToLatencyHistogram(dt time.Duration) {
+	lmu.Lock()
+	defer lmu.Unlock()
+	latencies[dt]++
+	go func() {
+		<-time.After(interval)
+		lmu.Lock()
+		defer lmu.Unlock()
+		latencies[dt]--
+		if latencies[dt] == 0 {
+			delete(latencies, dt)
+		}
+	}()
 }
 
 func sendTermboxInterrupts() {
@@ -205,33 +191,50 @@ func draw() {
 
 	// Do the actual drawing.
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
-	y := 0
-	tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("Target QPS: %d", atomic.LoadInt32(&reqQPS)))
-	y++
-	tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("%d workers", atomic.LoadInt64(numWorkers)))
-	y++
-	tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("Request timeout: %v", requestTimeout()))
-	y++
-	y++
+	var p printer
+	p.printf("%d workers", atomic.LoadInt64(numWorkers))
+	p.printf("Results in past %v:", interval)
+
+	lmu.Lock()
+	defer lmu.Unlock()
+	if len(latencies) == 0 {
+		p.printf("  No responses")
+	} else {
+		maxDt := time.Duration(0)
+		for dt := range latencies {
+			if dt > maxDt {
+				maxDt = dt
+			}
+		}
+		p.printf("  Max latency: %v", maxDt)
+	}
+
 	hmu.Lock()
 	defer hmu.Unlock()
 	if len(histogram) == 0 {
-		tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("No responses in past %v", interval))
+		// Already reported above.
 	} else {
-		tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("Responses in past %v:", interval))
-		y++
+		p.printf("  Responses:")
 		var keys []string
 		for k := range histogram {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			msg := fmt.Sprintf("  %s: %d", k, histogram[k])
-			tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, msg)
-			y++
+			p.printf("    %s: %d", k, histogram[k])
 		}
 	}
+	p.printf("")
 	termbox.Flush()
+}
+
+type printer struct {
+	y int
+}
+
+func (p *printer) printf(fmat string, args ...interface{}) {
+	tbprint(0, p.y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf(fmat, args...))
+	p.y++
 }
 
 func tbprint(x, y int, fg, bg termbox.Attribute, msg string) {
