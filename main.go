@@ -181,19 +181,19 @@ func draw() {
 	// Do the actual drawing.
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 	y := 0
-	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("Target QPS: %d", atomic.LoadInt32(&reqQPS)))
+	tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("Target QPS: %d", atomic.LoadInt32(&reqQPS)))
 	y++
-	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("%d workers", *numWorkers))
+	tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("%d workers", *numWorkers))
 	y++
-	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("Request timeout: %v", requestTimeout()))
+	tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("Request timeout: %v", requestTimeout()))
 	y++
 	y++
 	hmu.Lock()
 	defer hmu.Unlock()
 	if len(histogram) == 0 {
-		tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("No responses in past %v", interval))
+		tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("No responses in past %v", interval))
 	} else {
-		tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("Responses in past %v:", interval))
+		tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf("Responses in past %v:", interval))
 		y++
 		var keys []string
 		for k := range histogram {
@@ -202,7 +202,7 @@ func draw() {
 		sort.Strings(keys)
 		for _, k := range keys {
 			msg := fmt.Sprintf("  %s: %d", k, histogram[k])
-			tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, msg)
+			tbprint(0, y, termbox.ColorWhite, termbox.ColorDefault, msg)
 			y++
 		}
 	}
