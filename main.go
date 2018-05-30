@@ -78,29 +78,46 @@ func main() {
 }
 
 func hammer(url string) {
-	ch := make(chan string)
+	workChan := make(chan struct{}, 1000000)
 
 	// Spin up workers.
 	for i := 0; i < *numWorkers; i++ {
-		go worker(ch)
+		go worker(url, workChan)
 	}
 
-	// Orchestrate the work.
-	for _ = range ticktock() {
-		ch <- url
+	// Feed the work channel reqQPS tickets per second.
+	for _ = range time.Tick(time.Second) {
+		// Drain workChan so we know it's starting from 0.
+	loop:
+		for {
+			select {
+			case <-workChan:
+			default:
+				break loop
+			}
+		}
+
+		// Put QPS work tickets into workChan.
+		for i := int32(0); i < atomic.LoadInt32(&reqQPS); i++ {
+			workChan <- struct{}{}
+		}
 	}
 }
 
-func worker(ch chan string) {
-	for u := range ch {
+func worker(url string, workChan chan struct{}) {
+	for {
+		// Wait until there's work to do.
+		<-workChan
+
+		// Do some work.
 		switch *fetcher {
 		case "curl":
-			cmd := exec.Command("curl", "-s", "-S", u)
+			cmd := exec.Command("curl", "-s", "-S", url)
 			out, _ := cmd.CombinedOutput()
 			addToHistogram(string(out))
 		case "go":
-			client := http.Client{Timeout: time.Duration(time.Second)}
-			resp, err := client.Get(u)
+			client := http.Client{Timeout: time.Duration(requestTimeout())}
+			resp, err := client.Get(url)
 			if resp != nil {
 				// Read it, just in case that matters somehow.
 				if _, err := ioutil.ReadAll(resp.Body); err != nil {
@@ -129,6 +146,8 @@ func worker(ch chan string) {
 	}
 }
 
+// addToHistogram increments the given string in the histogram and then
+// decrements it again after a second.
 func addToHistogram(s string) {
 	hmu.Lock()
 	defer hmu.Unlock()
@@ -141,21 +160,13 @@ func addToHistogram(s string) {
 	}()
 }
 
-func dief(fmat string, args ...interface{}) {
-	termbox.Close()
-	fmt.Printf(fmat, args...)
-	os.Exit(1)
-}
-
-func ticktock() chan struct{} {
-	c := make(chan struct{})
-	go func() {
-		for {
-			time.Sleep(time.Duration(int32(time.Second) / atomic.LoadInt32(&reqQPS)))
-			c <- struct{}{}
-		}
-	}()
-	return c
+// requestTimeout calculates how long workers should spend on each request.
+func requestTimeout() time.Duration {
+	d := time.Duration(float64(time.Second) * (float64(*numWorkers) / float64(atomic.LoadInt32(&reqQPS))))
+	if d > time.Second {
+		d = time.Second
+	}
+	return d
 }
 
 func sendTermboxInterrupts() {
@@ -173,6 +184,8 @@ func draw() {
 	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("Target QPS: %d", atomic.LoadInt32(&reqQPS)))
 	y++
 	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("%d workers", *numWorkers))
+	y++
+	tbprint(0, y, termbox.ColorWhite, termbox.ColorBlack, fmt.Sprintf("Request timeout: %v", requestTimeout()))
 	y++
 	y++
 	hmu.Lock()
