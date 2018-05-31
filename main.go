@@ -54,7 +54,7 @@ func main() {
 	}
 	termbox.SetInputMode(termbox.InputEsc | termbox.InputMouse)
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
-	draw()
+	draw(u)
 
 	doneChan := make(chan struct{})
 	go hammer(u, doneChan)
@@ -87,7 +87,7 @@ func main() {
 				os.Exit(0)
 			}
 		case termbox.EventInterrupt:
-			draw()
+			draw(u)
 		}
 	}
 }
@@ -192,11 +192,12 @@ func sendTermboxInterrupts() {
 }
 
 // draw repaints the termbox UI, showing stats.
-func draw() {
+func draw(url string) {
 
 	// Do the actual drawing.
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 	var p printer
+	p.printf("%s", url)
 	p.printf("%d workers", atomic.LoadInt64(numWorkers))
 	p.printf("Results in past %v:", interval)
 
