@@ -47,6 +47,9 @@ func main() {
 		os.Exit(0)
 	}
 	u := flag.Arg(0)
+	if !strings.HasPrefix(u, "http") {
+		u = "http://" + u
+	}
 
 	err := termbox.Init()
 	if err != nil {
