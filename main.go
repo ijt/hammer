@@ -242,7 +242,7 @@ type printer struct {
 }
 
 func (p *printer) printf(fmat string, args ...interface{}) {
-	tbprint(0, p.y, termbox.ColorWhite, termbox.ColorDefault, fmt.Sprintf(fmat, args...))
+	tbprint(0, p.y, termbox.ColorDefault, termbox.ColorDefault, fmt.Sprintf(fmat, args...))
 	p.y++
 }
 
